@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Endless Dream</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background: #050608;
+      height: 100%;
+      width: 100%;
+      touch-action: none;
+      font-family: system-ui, sans-serif;
+      color: #f4f4f4;
+    }
+    #app {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: stretch;
+      justify-content: center;
+      background: radial-gradient(circle at top, #171a22 0, #050608 55%, #000 100%);
+    }
+    canvas {
+      display: block;
+    }
+    #ui-layer {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+    #hud {
+      position: absolute;
+      top: 10px;
+      left: 12px;
+      right: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+      opacity: 0.9;
+      pointer-events: none;
+    }
+    #hud-left {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    #hud-title {
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      font-size: 11px;
+      color: #d3d3d3;
+    }
+    #hud-sub {
+      font-size: 10px;
+      color: #8b8b8b;
+    }
+    #focus-meter {
+      width: 80px;
+      height: 4px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.06);
+      overflow: hidden;
+      margin-top: 4px;
+    }
+    #focus-fill {
+      height: 100%;
+      width: 100%;
+      background: linear-gradient(90deg, #38d996, #f6d86b);
+      transform-origin: left center;
+      transform: scaleX(1);
+    }
+    #whisper {
+      font-size: 10px;
+      color: #b75b5b;
+      text-align: right;
+      min-height: 1.2em;
+    }
+
+    #touch-look-area {
+      position: absolute;
+      inset: 0;
+      pointer-events: auto;
+    }
+
+    #joystick-zone {
+      position: absolute;
+      left: 6%;
+      bottom: 8%;
+      width: 32vw;
+      height: 32vw;
+      max-width: 180px;
+      max-height: 180px;
+      pointer-events: auto;
+    }
+
+    #hint {
+      position: absolute;
+      bottom: 8px;
+      right: 12px;
+      font-size: 9px;
+      color: rgba(255,255,255,0.35);
+      text-align: right;
+      max-width: 55%;
+      pointer-events: none;
+    }
+
+    @media (min-width: 900px) {
+      #joystick-zone { display: none; }
+      #hint { max-width: 30%; }
+    }
+
+    /* HORROR DREAM TITLE / INTRO OVERLAY */
+    #overlay {
+      position: fixed;
+      inset: 0;
+      background: radial-gradient(circle at 20% 0%, #1a1015 0, #050308 45%, #010103 100%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      z-index: 10;
+      pointer-events: auto;
+      transition: opacity 0.8s ease-in-out;
+    }
+    #overlay.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    #overlay-noise {
+      position: absolute;
+      inset: -20px;
+      background-image:
+        radial-gradient(circle at 10% 20%, rgba(255,255,255,0.09) 0, transparent 55%),
+        radial-gradient(circle at 80% 70%, rgba(255,180,180,0.10) 0, transparent 60%);
+      mix-blend-mode: screen;
+      opacity: 0.35;
+      filter: blur(12px);
+      animation: driftNoise 28s linear infinite alternate;
+      pointer-events: none;
+    }
+
+    #loading-screen,
+    #title-screen {
+      position: relative;
+      z-index: 2;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 0 26px;
+    }
+
+    #loading-screen {
+      gap: 20px;
+      animation: fadeInUp 0.8s ease-out forwards;
+    }
+    #loading-label {
+      font-size: 11px;
+      letter-spacing: 0.25em;
+      text-transform: uppercase;
+      color: rgba(255,255,255,0.6);
+    }
+    #loading-bar {
+      width: 140px;
+      height: 3px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.08);
+      overflow: hidden;
+    }
+    #loading-fill {
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(90deg, #ff4b6b, #ffd88a);
+      transform-origin: left center;
+      transform: scaleX(0);
+      animation: loadingPulse 2.4s ease-in-out infinite;
+    }
+    #loading-sub {
+      margin-top: 8px;
+      font-size: 10px;
+      color: rgba(255,255,255,0.55);
+      max-width: 220px;
+    }
+
+    #title-screen {
+      display: none;
+      gap: 16px;
+      opacity: 0;
+      animation: titleReveal 1.4s ease-out forwards;
+    }
+    #game-title {
+      font-size: 26px;
+      letter-spacing: 0.32em;
+      text-indent: 0.32em;
+      text-transform: uppercase;
+      color: #f4f0f1;
+      text-shadow: 0 0 18px rgba(255, 90, 135, 0.6);
+    }
+    #game-subtitle {
+      font-size: 11px;
+      color: rgba(255,220,220,0.72);
+      max-width: 260px;
+      line-height: 1.4;
+    }
+    #game-prompt {
+      margin-top: 4px;
+      font-size: 9px;
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      color: rgba(255,255,255,0.65);
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.16);
+      background: radial-gradient(circle at 50% 0%, rgba(255,255,255,0.04) 0, rgba(0,0,0,0.78) 55%);
+      backdrop-filter: blur(10px);
+      transform: translateY(0);
+      animation: pulsePrompt 1.7s ease-in-out infinite;
+    }
+    #game-meta {
+      margin-top: 4px;
+      font-size: 9px;
+      color: rgba(255,255,255,0.42);
+    }
+
+    @keyframes driftNoise {
+      0% { transform: translate3d(-8px, 4px, 0) scale(1.02); }
+      50% { transform: translate3d(12px, -10px, 0) scale(1.05); }
+      100% { transform: translate3d(-6px, 8px, 0) scale(1.02); }
+    }
+
+    @keyframes fadeInUp {
+      from {
+        opacity: 0;
+        transform: translate3d(0, 10px, 0);
+      }
+      to {
+        opacity: 1;
+        transform: translate3d(0, 0, 0);
+      }
+    }
+
+    @keyframes loadingPulse {
+      0% { transform: scaleX(0.05); opacity: 0.2; }
+      40% { transform: scaleX(0.85); opacity: 1; }
+      70% { transform: scaleX(1.0); opacity: 0.8; }
+      100% { transform: scaleX(0.05); opacity: 0.15; }
+    }
+
+    @keyframes titleReveal {
+      0% { opacity: 0; transform: translate3d(0, 10px, 0); }
+      100% { opacity: 1; transform: translate3d(0, 0, 0); }
+    }
+
+    @keyframes pulsePrompt {
+      0% { opacity: 0.5; transform: translateY(0); }
+      50% { opacity: 1; transform: translateY(-2px); }
+      100% { opacity: 0.5; transform: translateY(0); }
+    }
+
+    /* STATS HUD */
+    #stats {
+      position: absolute;
+      bottom: 8px;
+      left: 12px;
+      font-size: 9px;
+      color: rgba(255,255,255,0.65);
+      line-height: 1.3;
+      pointer-events: none;
+      text-shadow: 0 0 4px rgba(0,0,0,0.6);
+    }
+
+    /* SAVE / LOAD UI */
+    #save-load-toggle {
+      position: absolute;
+      bottom: 8px;
+      right: 12px;
+      width: 28px;
+      height: 28px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(0,0,0,0.65);
+      color: rgba(255,255,255,0.8);
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      pointer-events: auto;
+      backdrop-filter: blur(10px);
+    }
+    #save-load-toggle span {
+      transform: translateY(1px);
+    }
+
+    #save-load-panel {
+      position: absolute;
+      right: 10px;
+      bottom: 44px;
+      width: 210px;
+      max-width: 70vw;
+      border-radius: 12px;
+      background: rgba(3, 3, 6, 0.94);
+      border: 1px solid rgba(255,255,255,0.12);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.8);
+      padding: 8px 10px;
+      font-size: 9px;
+      color: rgba(255,255,255,0.78);
+      pointer-events: auto;
+      opacity: 0;
+      transform: translateY(8px);
+      transition: opacity 0.16s ease-out, transform 0.16s ease-out;
+      backdrop-filter: blur(12px);
+    }
+    #save-load-panel.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    #save-load-panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+      font-size: 9px;
+      text-transform: uppercase;
+      letter-spacing: 0.13em;
+      color: rgba(255,255,255,0.62);
+    }
+    #save-load-panel-close {
+      border: none;
+      background: transparent;
+      color: rgba(255,255,255,0.6);
+      font-size: 11px;
+      padding: 0;
+      cursor: pointer;
+    }
+    .slot-row {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      padding: 5px 0;
+      border-top: 1px solid rgba(255,255,255,0.08);
+    }
+    .slot-row:first-of-type {
+      border-top: none;
+    }
+    .slot-title {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 9px;
+      text-transform: uppercase;
+      letter-spacing: 0.09em;
+      color: rgba(255,255,255,0.75);
+    }
+    .slot-meta {
+      font-size: 9px;
+      color: rgba(255,255,255,0.6);
+    }
+    .slot-actions {
+      margin-top: 3px;
+      display: flex;
+      gap: 4px;
+    }
+    .slot-btn {
+      flex: 1;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(0,0,0,0.7);
+      color: rgba(255,255,255,0.85);
+      font-size: 9px;
+      padding: 4px 0;
+      cursor: pointer;
+    }
+    .slot-btn.secondary {
+      border-style: dashed;
+      border-color: rgba(255,255,255,0.25);
+      color: rgba(255,255,255,0.7);
+    }
+    .slot-btn:disabled {
+      opacity: 0.35;
+      cursor: default;
+    }
+  </style>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://esm.sh/three@0.164.0",
+        "nipplejs": "https://esm.sh/nipplejs@0.10.1"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="app">
+    <canvas id="scene"></canvas>
+    <div id="ui-layer">
+      <div id="touch-look-area"></div>
+      <div id="joystick-zone"></div>
+      <div id="hud">
+        <div id="hud-left">
+          <div id="hud-title">JAFET / AGE 19</div>
+          <div id="hud-sub">somewhere between the trees / the dream won’t end</div>
+          <div id="focus-meter"><div id="focus-fill"></div></div>
+        </div>
+        <div id="whisper"></div>
+      </div>
+      <div id="hint">
+        WASD / joystick to walk. Drag to look. The forest never ends.
+      </div>
+      <div id="stats">
+        <div id="stats-steps">steps: 0</div>
+        <div id="stats-miles">miles: 0.00</div>
+      </div>
+
+      <!-- SAVE / LOAD UI -->
+      <button id="save-load-toggle" aria-label="Save / load slots">
+        <span>◎</span>
+      </button>
+      <div id="save-load-panel">
+        <div id="save-load-panel-header">
+          <span>SAVE SLOTS</span>
+          <button id="save-load-panel-close" aria-label="Close save slots">✕</button>
+        </div>
+
+        <div class="slot-row" data-slot="1">
+          <div class="slot-title">
+            <span>SLOT 1</span>
+            <span class="slot-status" id="slot1-status">empty</span>
+          </div>
+          <div class="slot-meta" id="slot1-meta">no steps yet</div>
+          <div class="slot-actions">
+            <button class="slot-btn" id="slot1-save">Save</button>
+            <button class="slot-btn secondary" id="slot1-load" disabled>Load</button>
+          </div>
+        </div>
+
+        <div class="slot-row" data-slot="2">
+          <div class="slot-title">
+            <span>SLOT 2</span>
+            <span class="slot-status" id="slot2-status">empty</span>
+          </div>
+          <div class="slot-meta" id="slot2-meta">no steps yet</div>
+          <div class="slot-actions">
+            <button class="slot-btn" id="slot2-save">Save</button>
+            <button class="slot-btn secondary" id="slot2-load" disabled>Load</button>
+          </div>
+        </div>
+
+        <div class="slot-row" data-slot="3">
+          <div class="slot-title">
+            <span>SLOT 3</span>
+            <span class="slot-status" id="slot3-status">empty</span>
+          </div>
+          <div class="slot-meta" id="slot3-meta">no steps yet</div>
+          <div class="slot-actions">
+            <button class="slot-btn" id="slot3-save">Save</button>
+            <button class="slot-btn secondary" id="slot3-load" disabled>Load</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- HORROR DREAM TITLE / INTRO OVERLAY -->
+  <div id="overlay">
+    <div id="overlay-noise"></div>
+
+    <div id="loading-screen">
+      <div id="loading-label">DESCENDING</div>
+      <div id="loading-bar">
+        <div id="loading-fill"></div>
+      </div>
+      <div id="loading-sub">
+        pulling the forest in around you, stitching together trees that never end.
+      </div>
+    </div>
+
+    <div id="title-screen">
+      <div id="game-title">ENDLESS DREAM</div>
+      <div id="game-subtitle">
+        the night remembers every step you take between the trees.
+      </div>
+      <div id="game-prompt">
+        tap / click to wake into the dream
+      </div>
+      <div id="game-meta">
+        headphones recommended · mouse / touch to look · wasd / joystick to walk
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="./main.js"></script>
+</body>
+</html>
+
