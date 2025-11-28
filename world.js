@@ -105,12 +105,19 @@ export function createWorld(scene, camera) {
 
     // base vertical position for animation
     tree.userData.baseY = 1.6;
+
+    // per-tree base scale and spin phase for variety
+    tree.userData.scaleBase = 0.8 + Math.random() * 0.6; // 0.8–1.4
+    tree.userData.spinPhase = Math.random() * Math.PI * 2;
+    tree.userData.spinSpeed = 0.8 + Math.random() * 0.8; // used during spawn
+
     tree.position.y = tree.userData.baseY;
 
-    randomizeTreePosition(tree, camera.position.x, camera.position.z, i);
+    // initial placement uses existing trees as spacing reference
+    randomizeTreePosition(tree, camera.position.x, camera.position.z, i, trees);
     // initial trees start fully grown; recycled ones will animate in
     tree.userData.spawnTime = -1000;
-    tree.scale.set(1, 1, 1);
+    tree.scale.setScalar(tree.userData.scaleBase);
 
     trees.push(tree);
     scene.add(tree);
@@ -146,19 +153,60 @@ export function createWorld(scene, camera) {
   };
 }
 
-function randomizeTreePosition(tree, cx, cz, seed = Math.random() * 1000) {
+function randomizeTreePosition(tree, cx, cz, index = Math.random() * 1000, allTrees = null) {
   const minRadius = 6;
-  const maxRadius = 36;
+  const maxRadius = 40;
+  const minSpacing = 2.8; // keep trunks from clumping too tightly
+  const minSpacingSq = minSpacing * minSpacing;
 
-  // use a slightly more even angular spread
-  const angle = Math.random() * Math.PI * 2;
-  const r = minRadius + (maxRadius - minRadius) * (0.4 + 0.6 * Math.random());
+  // golden-angle based seed for smoother angular spread
+  const goldenAngle = 2.399963229728653; // ~137.5 degrees in radians
 
-  tree.position.x = cx + Math.cos(angle) * r;
-  tree.position.z = cz + Math.sin(angle) * r;
+  let chosenX = cx;
+  let chosenZ = cz;
 
-  const sway = (Math.sin(seed) - 0.5) * 0.3;
-  tree.rotation.y = angle + sway;
+  for (let attempt = 0; attempt < 7; attempt++) {
+    const angleBase = index * goldenAngle;
+    const jitter = (Math.random() - 0.5) * 0.6; // small random wobble
+    const angle = angleBase + jitter;
+
+    // radius biased toward a ring, with a bit of randomness
+    const rRand = Math.random();
+    const r = minRadius + (maxRadius - minRadius) * (0.35 + 0.65 * Math.pow(rRand, 0.8));
+
+    const x = cx + Math.cos(angle) * r;
+    const z = cz + Math.sin(angle) * r;
+
+    let ok = true;
+    if (allTrees && allTrees.length > 0) {
+      for (let i = 0; i < allTrees.length; i++) {
+        const other = allTrees[i];
+        if (other === tree) continue;
+        const dx = other.userData.baseX !== undefined ? other.userData.baseX - x : other.position.x - x;
+        const dz = other.userData.baseZ !== undefined ? other.userData.baseZ - z : other.position.z - z;
+        if (dx * dx + dz * dz < minSpacingSq) {
+          ok = false;
+          break;
+        }
+      }
+    }
+
+    if (ok) {
+      chosenX = x;
+      chosenZ = z;
+      break;
+    }
+  }
+
+  tree.position.x = chosenX;
+  tree.position.z = chosenZ;
+
+  // store "ideal" base position used for dreamy motion and respawn animation
+  tree.userData.baseX = chosenX;
+  tree.userData.baseZ = chosenZ;
+
+  const sway = (Math.sin(index) - 0.5) * 0.3;
+  tree.rotation.y = Math.atan2(chosenZ - cz, chosenX - cx) + sway;
 }
 
 // new helper to create a spherical shell of stars overhead
@@ -210,51 +258,79 @@ export function updateWorld(world, camera, dt) {
   // recycle trees around the player
   for (let i = 0; i < trees.length; i++) {
     const t = trees[i];
-    const dx = t.position.x - cx;
-    const dz = t.position.z - cz;
+    const dx = (t.userData.baseX ?? t.position.x) - cx;
+    const dz = (t.userData.baseZ ?? t.position.z) - cz;
     if (dx * dx + dz * dz > maxDist * maxDist) {
-      randomizeTreePosition(t, cx, cz, i * 13.37);
+      randomizeTreePosition(t, cx, cz, i * 13.37, trees);
       // when tree is "reloaded" into the endless ring, animate it in
       t.userData.spawnTime = world.internalTime;
       // start tiny and below ground so they pop up from the distance
       const baseY = t.userData.baseY ?? 1.6;
       t.position.y = baseY - 2.0;
-      t.scale.set(0.05, 0.05, 0.05);
+      // ensure base scale exists
+      if (t.userData.scaleBase === undefined) {
+        t.userData.scaleBase = 0.8 + Math.random() * 0.6;
+      }
+      t.scale.setScalar(0.05 * t.userData.scaleBase);
+      // randomize spin speed slightly on spawn
+      t.userData.spinSpeed = 0.8 + Math.random() * 0.8;
     }
   }
 
   // dreamy / horror-themed motion as you walk toward trees
   for (let i = 0; i < trees.length; i++) {
     const t = trees[i];
-    const dx = t.position.x - cx;
-    const dz = t.position.z - cz;
-    const dist = Math.sqrt(dx * dx + dz * dz);
 
     const baseY = t.userData.baseY ?? 1.6;
+    const baseX = t.userData.baseX ?? t.position.x;
+    const baseZ = t.userData.baseZ ?? t.position.z;
+
+    const ddx = baseX - cx;
+    const ddz = baseZ - cz;
+    const dist = Math.sqrt(ddx * ddx + ddz * ddz);
 
     // spawn pop-up (0–3 seconds) for trees that just appeared from far away
     const spawnTime = t.userData.spawnTime ?? 0;
     const age = Math.max(0, (world.internalTime - spawnTime));
     const growDuration = 3.0;
-    let growFactor = 1.0;
+    let growFactor = t.userData.scaleBase || 1.0;
     let riseOffset = 0.0;
+    let spinAdd = 0.0;
+    let offsetX = 0.0;
+    let offsetZ = 0.0;
 
     if (age < growDuration) {
       const u = age / growDuration;
-      // stronger ease-out-back for a dreamy pop + slight overshoot
       const overshoot = 1.9;
       const eased = 1 + overshoot * Math.pow(u - 1, 3) + overshoot * Math.pow(u - 1, 2);
 
-      // scale from almost nothing to slightly oversized, then settle
-      growFactor = THREE.MathUtils.lerp(0.05, 1.15, eased);
+      const baseScale = t.userData.scaleBase || 1.0;
+      // grow from very small to slightly overscaled then settle back
+      growFactor = THREE.MathUtils.lerp(0.05 * baseScale, 1.15 * baseScale, eased);
 
       // rise up from below the ground and overshoot a bit, more visible at distance
       const distFactor = THREE.MathUtils.clamp((dist - 10) / 25, 0, 1);
       const baseRise = THREE.MathUtils.lerp(0.3, 1.4, distFactor);
       riseOffset = THREE.MathUtils.lerp(-2.0, baseRise, eased);
+
+      // gentle spin while materializing, slowing as it finishes
+      const spinSpeed = t.userData.spinSpeed || 1.0;
+      spinAdd = (1.0 - u) * spinSpeed * 0.4;
+
+      // subtle drift along the radial direction as it "locks" into place
+      if (dist > 0.001) {
+        const nx = ddx / dist;
+        const nz = ddz / dist;
+        const driftMag = (1.0 - u) * 0.8 * distFactor;
+        offsetX = nx * driftMag;
+        offsetZ = nz * driftMag;
+      }
     } else {
-      growFactor = 1.0;
+      growFactor = t.userData.scaleBase || 1.0;
       riseOffset = 0.0;
+      spinAdd = 0.0;
+      offsetX = 0.0;
+      offsetZ = 0.0;
     }
 
     // subtle breathing / leaning when near the player
@@ -271,7 +347,10 @@ export function updateWorld(world, camera, dt) {
     // apply animation
     t.scale.setScalar(growFactor);
     t.position.y = baseY + verticalPulse + riseOffset;
+    t.position.x = baseX + offsetX;
+    t.position.z = baseZ + offsetZ;
     t.rotation.z = lean;
+    t.rotation.y += spinAdd * dt;
   }
 
   // reposition ground tiles so they endlessly follow the camera

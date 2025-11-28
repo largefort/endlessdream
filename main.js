@@ -9,6 +9,11 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPrefer
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 renderer.setSize(window.innerWidth, window.innerHeight, false);
 renderer.shadowMap.enabled = false;
+// HDR-style tonemapping and color
+renderer.outputEncoding = THREE.sRGBEncoding;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
+renderer.physicallyCorrectLights = true;
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 80);
@@ -58,10 +63,14 @@ const whisperEl = document.getElementById('whisper');
 const statsStepsEl = document.getElementById('stats-steps');
 const statsMilesEl = document.getElementById('stats-miles');
 
-// SAVE / LOAD UI ELEMENTS
-const saveLoadToggleEl = document.getElementById('save-load-toggle');
-const saveLoadPanelEl = document.getElementById('save-load-panel');
-const saveLoadCloseEl = document.getElementById('save-load-panel-close');
+// TITLE / SAVE SLOT UI ELEMENTS
+const overlayEl = document.getElementById('overlay');
+const loadingScreenEl = document.getElementById('loading-screen');
+const titleScreenEl = document.getElementById('title-screen');
+const loadingFillEl = document.getElementById('loading-fill');
+const btnContinueEl = document.getElementById('btn-continue');
+const btnNewGameEl = document.getElementById('btn-new-game');
+
 const slotStatusEls = {
   1: document.getElementById('slot1-status'),
   2: document.getElementById('slot2-status'),
@@ -72,22 +81,16 @@ const slotMetaEls = {
   2: document.getElementById('slot2-meta'),
   3: document.getElementById('slot3-meta')
 };
-const slotSaveBtns = {
-  1: document.getElementById('slot1-save'),
-  2: document.getElementById('slot2-save'),
-  3: document.getElementById('slot3-save')
+const slotContinueBtns = {
+  1: document.getElementById('slot1-continue'),
+  2: document.getElementById('slot2-continue'),
+  3: document.getElementById('slot3-continue')
 };
-const slotLoadBtns = {
-  1: document.getElementById('slot1-load'),
-  2: document.getElementById('slot2-load'),
-  3: document.getElementById('slot3-load')
+const slotNewBtns = {
+  1: document.getElementById('slot1-new'),
+  2: document.getElementById('slot2-new'),
+  3: document.getElementById('slot3-new')
 };
-
-// INTRO / TITLE OVERLAY ELEMENTS
-const overlayEl = document.getElementById('overlay');
-const loadingScreenEl = document.getElementById('loading-screen');
-const titleScreenEl = document.getElementById('title-screen');
-const loadingFillEl = document.getElementById('loading-fill');
 
 let focus = 1;              // 0..1 – Jafet’s mental resistance
 let whisperTimer = 0;
@@ -107,6 +110,9 @@ let totalDistanceMeters = 0;
 
 // SAVE / LOAD HELPERS
 const SAVE_KEY_PREFIX = 'endless_dream_slot_';
+const LAST_SLOT_KEY = 'endless_dream_last_slot';
+let currentSlot = null;
+let autosaveTimer = 0;
 
 function getSlotKey(slot) {
   return `${SAVE_KEY_PREFIX}${slot}`;
@@ -139,6 +145,20 @@ function applyState(state) {
   updateStatsDisplay();
 }
 
+function resetGameState() {
+  // reset player to starting position/orientation and stats
+  camera.position.set(0, 1.6, 0);
+  camera.rotation.set(0, 0, 0);
+  baseEyeHeight = 1.6;
+  bobTime = 0;
+  bobOffset = 0;
+  focus = 1;
+  focusFill.style.transform = 'scaleX(1)';
+  totalDistanceMeters = 0;
+  lastPos.set(camera.position.x, camera.position.y, camera.position.z);
+  updateStatsDisplay();
+}
+
 function formatTimestamp(ts) {
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return 'unknown';
@@ -152,14 +172,14 @@ function updateSlotUI(slot) {
   const raw = localStorage.getItem(key);
   const statusEl = slotStatusEls[slot];
   const metaEl = slotMetaEls[slot];
-  const loadBtn = slotLoadBtns[slot];
+  const contBtn = slotContinueBtns[slot];
 
-  if (!statusEl || !metaEl || !loadBtn) return;
+  if (!statusEl || !metaEl || !contBtn) return;
 
   if (!raw) {
     statusEl.textContent = 'empty';
     metaEl.textContent = 'no steps yet';
-    loadBtn.disabled = true;
+    contBtn.disabled = true;
     return;
   }
   try {
@@ -170,11 +190,11 @@ function updateSlotUI(slot) {
     const steps = dist / stepLengthMeters;
     statusEl.textContent = `saved · ${formatTimestamp(data.timestamp)}`;
     metaEl.textContent = `${Math.floor(steps)} steps · ${miles.toFixed(2)} miles`;
-    loadBtn.disabled = false;
+    contBtn.disabled = false;
   } catch {
     statusEl.textContent = 'corrupt';
     metaEl.textContent = 'cannot load';
-    loadBtn.disabled = true;
+    contBtn.disabled = true;
   }
 }
 
@@ -183,10 +203,12 @@ function refreshAllSlotsUI() {
 }
 
 function saveToSlot(slot) {
+  if (!slot) return;
   try {
     const key = getSlotKey(slot);
     const data = serializeState();
     localStorage.setItem(key, JSON.stringify(data));
+    localStorage.setItem(LAST_SLOT_KEY, String(slot));
     updateSlotUI(slot);
   } catch (err) {
     console.error('Failed to save slot', slot, err);
@@ -197,12 +219,40 @@ function loadFromSlot(slot) {
   try {
     const key = getSlotKey(slot);
     const raw = localStorage.getItem(key);
-    if (!raw) return;
+    if (!raw) return false;
     const data = JSON.parse(raw);
     applyState(data);
+    localStorage.setItem(LAST_SLOT_KEY, String(slot));
+    return true;
   } catch (err) {
     console.error('Failed to load slot', slot, err);
+    return false;
   }
+}
+
+function autoSelectAndLoadSlotIfPossible() {
+  // try last used slot, then any non-empty slot, otherwise slot 1 as fresh
+  let preferred = parseInt(localStorage.getItem(LAST_SLOT_KEY) || '1', 10);
+  if (Number.isNaN(preferred) || preferred < 1 || preferred > 3) preferred = 1;
+
+  let selected = preferred;
+  if (!localStorage.getItem(getSlotKey(preferred))) {
+    for (let s = 1; s <= 3; s++) {
+      if (localStorage.getItem(getSlotKey(s))) {
+        selected = s;
+        break;
+      }
+    }
+  }
+
+  currentSlot = selected;
+  const hasSave = !!localStorage.getItem(getSlotKey(selected));
+  if (hasSave) {
+    loadFromSlot(selected);
+  } else {
+    resetGameState();
+  }
+  localStorage.setItem(LAST_SLOT_KEY, String(selected));
 }
 
 // fake-progress loading bar for dreamy intro
@@ -225,9 +275,18 @@ setTimeout(() => {
   if (loadingScreenEl && titleScreenEl) {
     loadingScreenEl.style.display = 'none';
     titleScreenEl.style.display = 'flex';
-    // ensure title screen animation can play by forcing reflow then removing opacity override if any
-    // (animation is defined in CSS)
   }
+  refreshAllSlotsUI();
+  // update quick-continue availability
+  const lastSlot = parseInt(localStorage.getItem(LAST_SLOT_KEY) || '0', 10);
+  let hasAnySave = false;
+  for (let s = 1; s <= 3; s++) {
+    if (localStorage.getItem(getSlotKey(s))) {
+      hasAnySave = true;
+      break;
+    }
+  }
+  if (btnContinueEl) btnContinueEl.disabled = !hasAnySave;
 }, fakeLoadDuration + 300);
 
 // start initial loading bar animation
@@ -236,7 +295,15 @@ updateLoadingBar();
 // handle starting the dream (entering gameplay)
 function startGame() {
   if (gameStarted) return;
+
+  // if no slot chosen yet, auto-select and load / start fresh
+  if (!currentSlot) {
+    autoSelectAndLoadSlotIfPossible();
+  }
+
   gameStarted = true;
+  autosaveTimer = 0;
+
   if (overlayEl) {
     overlayEl.classList.add('hidden');
     overlayEl.addEventListener('transitionend', () => {
@@ -247,11 +314,57 @@ function startGame() {
   }
 }
 
-// pointer / key to start from title
+// TITLE BUTTON INTERACTIONS
+if (btnContinueEl) {
+  btnContinueEl.addEventListener('click', () => {
+    // try last slot, then any
+    autoSelectAndLoadSlotIfPossible();
+    startGame();
+  });
+}
+
+if (btnNewGameEl) {
+  btnNewGameEl.addEventListener('click', () => {
+    // new game in last-used slot or slot 1
+    let slot = parseInt(localStorage.getItem(LAST_SLOT_KEY) || '1', 10);
+    if (Number.isNaN(slot) || slot < 1 || slot > 3) slot = 1;
+    currentSlot = slot;
+    resetGameState();
+    localStorage.setItem(LAST_SLOT_KEY, String(slot));
+    startGame();
+  });
+}
+
+// per-slot buttons
+[1, 2, 3].forEach((slot) => {
+  const contBtn = slotContinueBtns[slot];
+  const newBtn = slotNewBtns[slot];
+
+  if (contBtn) {
+    contBtn.addEventListener('click', () => {
+      currentSlot = slot;
+      loadFromSlot(slot);
+      startGame();
+    });
+  }
+  if (newBtn) {
+    newBtn.addEventListener('click', () => {
+      currentSlot = slot;
+      resetGameState();
+      localStorage.setItem(LAST_SLOT_KEY, String(slot));
+      startGame();
+    });
+  }
+});
+
+// pointer / key to start from title with auto-load if user taps background
 if (overlayEl) {
   overlayEl.addEventListener('pointerdown', (e) => {
-    // ignore taps while still on loading screen
     if (!loadingDone) return;
+    const target = e.target;
+    // if tap is on a button or inside slot panel, ignore (those have their own handlers)
+    if (target.closest && target.closest('button')) return;
+    if (target.closest && target.closest('#title-slots')) return;
     startGame();
   });
   window.addEventListener('keydown', (e) => {
@@ -260,61 +373,6 @@ if (overlayEl) {
       startGame();
     }
   });
-}
-
-// SAVE / LOAD UI INTERACTION
-if (saveLoadToggleEl && saveLoadPanelEl) {
-  saveLoadToggleEl.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const isVisible = saveLoadPanelEl.classList.contains('visible');
-    if (isVisible) {
-      saveLoadPanelEl.classList.remove('visible');
-    } else {
-      refreshAllSlotsUI();
-      saveLoadPanelEl.classList.add('visible');
-    }
-  });
-
-  if (saveLoadCloseEl) {
-    saveLoadCloseEl.addEventListener('click', (e) => {
-      e.stopPropagation();
-      saveLoadPanelEl.classList.remove('visible');
-    });
-  }
-
-  // close panel when tapping outside it
-  document.addEventListener('pointerdown', (e) => {
-    if (!saveLoadPanelEl.classList.contains('visible')) return;
-    if (
-      e.target === saveLoadPanelEl ||
-      saveLoadPanelEl.contains(e.target) ||
-      e.target === saveLoadToggleEl
-    ) {
-      return;
-    }
-    saveLoadPanelEl.classList.remove('visible');
-  });
-
-  [1, 2, 3].forEach((slot) => {
-    const saveBtn = slotSaveBtns[slot];
-    const loadBtn = slotLoadBtns[slot];
-    if (saveBtn) {
-      saveBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        saveToSlot(slot);
-      });
-    }
-    if (loadBtn) {
-      loadBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        loadFromSlot(slot);
-        // keep panel open so user can see they're loaded
-      });
-    }
-  });
-
-  // init slot UI from existing localStorage
-  refreshAllSlotsUI();
 }
 
 function resize() {
@@ -402,6 +460,15 @@ function animate() {
       lastPos.set(camera.position.x, camera.position.y, camera.position.z);
 
       updateStatsDisplay();
+    }
+
+    // autosave every 30 seconds into the active slot
+    if (currentSlot) {
+      autosaveTimer += dt;
+      if (autosaveTimer >= 30) {
+        autosaveTimer = 0;
+        saveToSlot(currentSlot);
+      }
     }
   }
 
