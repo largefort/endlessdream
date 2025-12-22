@@ -149,15 +149,17 @@ export function createControls(camera, domElement) {
       zone: joystickZone,
       mode: 'static',
       position: { left: '50%', top: '50%' },
-      color: '#f2f2f2',
-      size: Math.min(joystickZone.clientWidth, joystickZone.clientHeight),
-      restOpacity: 0.12
+      color: '#e8edf5',
+      size: Math.min(joystickZone.clientWidth, joystickZone.clientHeight) * 0.75,
+      restOpacity: 0.35
     });
 
     joystick.on('move', (evt, data) => {
       if (!data || !data.vector) return;
+      // nipple.js uses x for horizontal, y for vertical
+      // convert to our coordinate system: x = right, y = forward
       moveDir.x = data.vector.x;
-      moveDir.y = data.vector.y;
+      moveDir.y = -data.vector.y; // invert Y to match forward direction
     });
 
     joystick.on('end', () => {
@@ -194,7 +196,7 @@ export function createControls(camera, domElement) {
     const cos = Math.cos(yaw);
 
     const dx = (mx * cos - my * sin) * moveStep;
-    const dz = (mx * sin - my * cos) * moveStep;
+    const dz = (mx * sin + my * cos) * moveStep;
 
     camera.position.x += dx;
     camera.position.z += dz;
